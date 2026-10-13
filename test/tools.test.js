@@ -8,7 +8,7 @@ const path = require('path');
 const files = require('../src/core/tools/files');
 const { runCommandTool } = require('../src/core/tools/command');
 const { normalizePlan } = require('../src/core/tools/plan');
-const { htmlToText, isPrivateHost, rewriteUrl } = require('../src/core/tools/web');
+const { htmlToText, isPrivateHost, rewriteUrl, parseSearchResults } = require('../src/core/tools/web');
 const { ChangeStore } = require('../src/core/changes');
 const { resolveProjectPath } = require('../src/core/safety');
 
@@ -216,4 +216,66 @@ test('web helpers', () => {
   assert.match(text, /## API/);
   assert.match(text, /`foo\(\)`& bar/);
   assert.doesNotMatch(text, /x\(\)/);
+});
+
+test('create_folder creates nested folders and undo removes them while empty', async () => {
+  const { root, ctx, store } = setup();
+  const res = await files.createFolder.run({ path: 'a/b/c' }, ctx);
+  assert.equal(res.ok, true, res.output);
+  assert.ok(fs.statSync(path.join(root, 'a/b/c')).isDirectory());
+  const again = await files.createFolder.run({ path: 'a/b/c' }, ctx);
+  assert.match(again.output, /already exists/);
+  const undo = await store.undo(res.display.change.id);
+  assert.equal(undo.ok, true, undo.message);
+  assert.equal(fs.existsSync(path.join(root, 'a')), false);
+});
+
+test('undo keeps a created folder that now contains files', async () => {
+  const { root, ctx, store } = setup();
+  const res = await files.createFolder.run({ path: 'keep' }, ctx);
+  fs.writeFileSync(path.join(root, 'keep', 'note.txt'), 'x');
+  const undo = await store.undo(res.display.change.id);
+  assert.equal(undo.ok, false);
+  assert.ok(fs.existsSync(path.join(root, 'keep', 'note.txt')));
+});
+
+test('move_path renames files and folders and can be undone', async () => {
+  const { root, ctx, store } = setup();
+  fs.writeFileSync(path.join(root, 'old.js'), 'x');
+  const res = await files.movePath.run({ from: 'old.js', to: 'src/new.js' }, ctx);
+  assert.equal(res.ok, true, res.output);
+  assert.ok(fs.existsSync(path.join(root, 'src/new.js')));
+  assert.equal(fs.existsSync(path.join(root, 'old.js')), false);
+  fs.writeFileSync(path.join(root, 'other.js'), 'y');
+  const clash = await files.movePath.run({ from: 'other.js', to: 'src/new.js' }, ctx);
+  assert.equal(clash.ok, false);
+  const undo = await store.undo(res.display.change.id);
+  assert.equal(undo.ok, true, undo.message);
+  assert.ok(fs.existsSync(path.join(root, 'old.js')));
+});
+
+test('without a project every access and command asks, with no blanket approval', async () => {
+  const { root, ctx, approvals } = setup({ edit: 'auto', commands: 'risky' });
+  const noProject = { ...ctx, root: null, workDir: root, noProject: true, resolve: (p) => ({ abs: path.resolve(root, p), rel: path.resolve(root, p), inside: false }) };
+  fs.writeFileSync(path.join(root, 'a.txt'), 'hello');
+  const read = await files.readFile.run({ path: 'a.txt' }, noProject);
+  assert.equal(read.ok, true);
+  const run = await runCommandTool.run({ command: 'node -e "console.log(7)"' }, noProject);
+  assert.equal(run.ok, true, run.output);
+  assert.equal(approvals.length, 2);
+  assert.ok(approvals.every((a) => a.blanket === false));
+  assert.match(approvals[0].message, /No project folder is open/);
+});
+
+test('web search results are parsed from DuckDuckGo HTML', () => {
+  const html = `<div class="result results_links results_links_deep web-result "><div class="links_main links_deep result__body">
+    <h2 class="result__title"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Follama%2Follama&amp;rut=abc">Ollama &amp; <b>API</b></a></h2>
+    <a class="result__snippet" href="//duckduckgo.com/l/?uddg=x">Get up and running with <b>large</b> language models.</a></div></div>
+    <div class="result results_links web-result "><h2 class="result__title"><a class="result__a" href="https://docs.ollama.com/api">API reference</a></h2></div>`;
+  const results = parseSearchResults(html);
+  assert.equal(results.length, 2);
+  assert.deepEqual(results[0], { title: 'Ollama & API', url: 'https://github.com/ollama/ollama', snippet: 'Get up and running with large language models.' });
+  assert.equal(results[1].url, 'https://docs.ollama.com/api');
+  const lite = `<a rel="nofollow" href="https://example.com/a" class='result-link'>Example A</a></td></tr><tr><td class='result-snippet'>First <b>hit</b></td>`;
+  assert.deepEqual(parseSearchResults(lite), [{ title: 'Example A', url: 'https://example.com/a', snippet: 'First hit' }]);
 });

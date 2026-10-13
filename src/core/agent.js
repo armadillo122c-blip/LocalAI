@@ -51,6 +51,9 @@ class AgentRun {
     this.controller = new AbortController();
     this.signal = this.controller.signal;
     this.blanket = new Set();
+    this.queue = [];
+    this.closed = false;
+    this.extraMs = 0;
     this.pausedMs = 0;
     this.step = 0;
     this.toolCallCount = 0;
@@ -59,6 +62,43 @@ class AgentRun {
 
   stop() {
     this.controller.abort();
+  }
+
+  /**
+   * A message the user sent while the agent is working. It is shown right away
+   * and handed to the model before its next step. Returns false once the run is over.
+   */
+  enqueue({ text, attachments = [] }) {
+    if (this.closed || this.signal.aborted) return false;
+    const item = this.addItem({
+      type: 'user',
+      text,
+      attachments: attachments.map((a) => ({ name: a.name, kind: a.kind })),
+      persona: personaBadge(this.persona),
+      effort: this.effortId,
+      queued: true,
+    });
+    this.queue.push({ item, text, attachments });
+    this.save();
+    return true;
+  }
+
+  /** Move queued user messages into the conversation. Returns true if there were any. */
+  drainQueue() {
+    if (!this.queue.length || !this.modelInfo) return false;
+    for (const q of this.queue.splice(0)) {
+      this.chat.messages.push(this.buildUserMessage(q.text, q.attachments));
+      this.updateItem(q.item, { queued: false });
+    }
+    // New instructions get some room even if the budget was nearly used.
+    const minSteps = Math.min(this.effort.maxSteps, 8);
+    if (this.effort.maxSteps - this.step + 1 < minSteps) this.effort.maxSteps = this.step - 1 + minSteps;
+    const minMs = Math.min(this.effort.maxMinutes, 5) * 60000;
+    const left = this.deadline() - Date.now();
+    if (left < minMs) this.extraMs += minMs - left;
+    this.budgetWarned = false;
+    this.save();
+    return true;
   }
 
   throwIfAborted() {
@@ -142,7 +182,8 @@ class AgentRun {
       this.numCtx = this.modelInfo.contextLength ? Math.min(configured, this.modelInfo.contextLength) : configured;
       this.limits = toolLimits(this.numCtx);
       this.toolMode = this.modelInfo.tools ? 'native' : 'text';
-      this.tools = this.registry.available({ permissions: this.permissions, hasProject: !!this.root });
+      // Without a project the tools still work, but every file access and command needs approval.
+      this.tools = this.registry.available({ permissions: this.permissions, hasProject: !!(this.root || this.homeDir) });
 
       this.chat.messages.push(this.buildUserMessage(text, attachments));
       this.save();
@@ -156,6 +197,12 @@ class AgentRun {
         this.addItem({ type: 'notice', level: 'error', text: err.message, hint: err.hint || '', code: err.code || '' });
       }
     } finally {
+      this.closed = true;
+      // Messages that arrived too late (or after Stop) stay in the history for the next turn.
+      for (const q of this.queue.splice(0)) {
+        this.chat.messages.push({ role: 'user', content: q.text });
+        this.updateItem(q.item, { queued: false });
+      }
       this.emit({ type: 'status', status: { running: false } });
       this.save();
     }
@@ -179,12 +226,13 @@ class AgentRun {
   }
 
   deadline() {
-    return this.started + this.effort.maxMinutes * 60000 + this.pausedMs;
+    return this.started + this.effort.maxMinutes * 60000 + this.pausedMs + this.extraMs;
   }
 
   async loop() {
     for (this.step = 1; ; this.step++) {
       this.throwIfAborted();
+      this.drainQueue();
       if (this.step > this.effort.maxSteps || Date.now() > this.deadline()) {
         await this.budgetSummary(this.step > this.effort.maxSteps ? 'steps' : 'time');
         return 'budget';
@@ -194,6 +242,7 @@ class AgentRun {
       const resp = await this.callModel({ note });
 
       if (!resp.calls.length) {
+        if (this.queue.length) continue; // the user sent something meanwhile: keep going
         const gate = this.finishGate(resp.text);
         if (gate) {
           this.chat.messages.push({ role: 'user', content: gate.note });
@@ -299,6 +348,8 @@ class AgentRun {
       tools: this.tools,
       toolMode: this.toolMode,
       settings: this.settings,
+      homeDir: this.homeDir,
+      knownFolders: this.knownFolders,
     });
     const schemas = this.toolMode === 'native' && !noTools && this.tools.length ? ToolRegistry.schemas(this.tools) : undefined;
     const reserve = Math.min(4096, Math.floor(this.numCtx * 0.25));
@@ -479,7 +530,7 @@ class AgentRun {
       };
     } else if (repeats >= 2 && tool.category !== 'plan') {
       result = { ok: false, output: `You already called ${call.name} with exactly these arguments ${repeats} times. Don't repeat it — use the earlier result or try a different approach.` };
-    } else if (this.effort.planRequired && !this.planGateUsed && !this.taskState.plan && tool.category === 'edit' && this.tools.some((t) => t.name === 'update_plan')) {
+    } else if (this.effort.planRequired && !this.planGateUsed && !this.taskState.plan && tool.category === 'edit' && tool.name !== 'create_folder' && this.tools.some((t) => t.name === 'update_plan')) {
       this.planGateUsed = true;
       result = {
         ok: false,
@@ -522,14 +573,19 @@ class AgentRun {
 
   toolContext(item) {
     const root = this.root;
+    const workDir = root || this.homeDir || null;
     return {
       root,
+      workDir,
+      noProject: !root,
       signal: this.signal,
       limits: this.limits,
       settings: this.settings,
       permissions: this.permissions,
       forceApproval: !!this.settings.safeMode,
-      resolve: (p) => resolveProjectPath(root, p),
+      // No project: paths resolve against the home folder and count as outside
+      // the project, so each access asks the user first.
+      resolve: (p) => (root ? resolveProjectPath(root, p) : resolveOutside(workDir, p)),
       relative: (abs) => (root ? toPosix(path.relative(root, abs)) || '.' : abs),
       approve: (req) => this.approve(req, item),
       recordChange: (c) => this.changeStore.record({ ...c, chatId: this.chat.id }),
@@ -568,6 +624,14 @@ class AgentRun {
     }
     this.status('tool', 'Plan updated');
   }
+}
+
+function resolveOutside(base, input) {
+  if (typeof input !== 'string' || !input.trim()) throw new Error('A path is required.');
+  let p = input.trim().replace(/^["'`]+|["'`]+$/g, '');
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) p = path.join(require('os').homedir(), p.slice(1));
+  const abs = path.resolve(base || process.cwd(), p);
+  return { abs, rel: abs, inside: false };
 }
 
 function normalizeNativeCall(c) {

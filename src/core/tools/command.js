@@ -25,10 +25,12 @@ const runCommandTool = {
   async run(args, ctx) {
     const command = String(args.command || args.cmd || '').trim();
     if (!command) return { ok: false, output: 'command is required' };
-    if (!ctx.root) return { ok: false, output: 'No project folder is open, so commands are disabled.' };
+    const base = ctx.root || ctx.workDir;
+    if (!base) return { ok: false, output: 'No working folder is available, so commands are disabled.' };
 
-    let cwd = ctx.root;
+    let cwd = base;
     const notes = [];
+    if (ctx.noProject) notes.push('No project folder is open, so every command needs your approval');
     if (args.cwd && args.cwd !== '.') {
       const target = ctx.resolve(args.cwd);
       if (!target.inside) notes.push(`Runs in a folder outside the project: ${target.abs}`);
@@ -36,9 +38,9 @@ const runCommandTool = {
     }
     const risk = analyzeCommand(command, { projectRoot: ctx.root, cwd });
     const reasons = [...notes, ...risk.reasons];
-    const risky = reasons.length > 0;
+    const risky = risk.reasons.length > 0 || (notes.length > 0 && !ctx.noProject);
     const mode = ctx.permissions.commands; // 'ask' | 'risky' | 'auto'
-    const needsApproval = risky || mode === 'ask' || ctx.forceApproval;
+    const needsApproval = risky || ctx.noProject || mode === 'ask' || ctx.forceApproval;
     if (needsApproval) {
       const res = await ctx.approve({
         kind: risky ? 'danger' : 'command',
@@ -47,7 +49,7 @@ const runCommandTool = {
         command,
         cwd: ctx.relative(cwd),
         reasons,
-        blanket: !risky,
+        blanket: !risky && !ctx.noProject,
       });
       if (!res.approved) {
         return {

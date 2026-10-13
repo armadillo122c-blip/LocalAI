@@ -93,18 +93,42 @@ You may write a short sentence before it. After each tool call, wait: the result
  * @param {'native'|'text'} o.toolMode
  * @param {object} o.settings
  */
-function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings }) {
+function capabilities(can) {
+  const abilities = [];
+  if (can('read_file')) abilities.push('read files and folders');
+  if (can('write_file')) abilities.push('create, edit, move and delete files and folders');
+  if (can('run_command')) abilities.push('run terminal commands and programs');
+  if (can('web_search') || can('fetch_url')) abilities.push('search the web and read web pages');
+  if (!abilities.length) return '';
+  return `# Your capabilities
+You are not a plain chatbot. LocalAI gives you real tools that act on the user's computer: you can ${abilities.join(', ')}.
+When the user asks for something that needs these abilities, call the tool and do it. Never say that you "can't access files", "can't create folders" or "don't have internet access" — you can. If an action is rejected by the user or a tool reports an error, say exactly that instead.
+The user may send new messages while you are working; they show up as normal user messages. Read them and adjust what you are doing.`;
+}
+
+function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings, homeDir = '', knownFolders = {} }) {
   const names = new Set(tools.map((t) => t.name));
   const can = (n) => names.has(n);
   const parts = [];
 
   parts.push(persona.systemPrompt.trim());
+  const caps = capabilities(can);
+  if (caps) parts.push(caps);
 
+  const folders = Object.entries(knownFolders)
+    .filter(([, p]) => p)
+    .map(([name, p]) => `${name}: ${p}`)
+    .join('; ');
   const env = [
     '# Environment',
     `- You are running locally on the user's computer through LocalAI (Ollama).`,
     `- OS: ${osName()}`,
-    root ? `- Project folder: ${root} (relative paths resolve here)` : '- No project folder is open. You can only chat; ask the user to open a folder if file access is needed.',
+    root
+      ? `- Project folder: ${root} (relative paths resolve here)`
+      : homeDir
+        ? `- No project folder is open. Relative paths resolve to the user's home folder: ${homeDir}. Your tools still work; LocalAI asks the user to approve each file access and command, so just call the tool.`
+        : '- No project folder is open.',
+    folders ? `- User folders: ${folders}` : null,
     can('run_command') ? `- Shell for run_command: ${shellDescription(settings.shell)}` : null,
     `- Date: ${new Date().toISOString().slice(0, 10)}`,
   ].filter(Boolean);
@@ -127,8 +151,10 @@ function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings })
       rules.push('- You cannot run commands with this AI profile. Tell the user which command to run instead.');
     }
     if (can('update_plan')) rules.push('- For multi-step tasks, track progress with update_plan.');
-    if (can('fetch_url')) rules.push('- Use fetch_url to read official documentation or GitHub files when you need facts you do not have.');
-    rules.push('- Stay inside the project folder. Do not read or print secrets (.env files, keys, tokens) unless the user explicitly asks.');
+    if (can('web_search')) rules.push('- Use web_search to find current information, documentation or downloads, then fetch_url to read a result.');
+    else if (can('fetch_url')) rules.push('- Use fetch_url to read official documentation or GitHub files when you need facts you do not have.');
+    if (root) rules.push('- Work inside the project folder; LocalAI asks the user before anything outside it.');
+    rules.push('- Do not read or print secrets (.env files, keys, tokens) unless the user asks.');
     rules.push('- If the user rejects an action, do not repeat it; choose another approach or ask.');
     rules.push('- When done, give a brief summary of what you changed and how you verified it. Do not claim something works unless you verified it.');
     parts.push(rules.join('\n'));

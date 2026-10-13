@@ -6,7 +6,8 @@ builds and tests, debug errors, and work through multi-step tasks. Every change 
 diff, you approve risky actions, and every edit can be undone.
 
 - **Ollama-powered**: uses your installed models through Ollama's local API, with streamed responses
-- **Real agent**: reads, creates, edits and deletes files, runs terminal commands, plans → works → tests → fixes
+- **Real agent**: reads, creates, edits, moves and deletes files and folders, runs terminal commands, searches the web, plans → works → tests → fixes
+- **Talk while it works**: send messages mid-task to steer the AI; it reads them at its next step
 - **Nine AI personas** sharing one installed model, each with its own prompt, permissions and defaults
 - **Effort levels** (Instant → Maximum) that change step and time budgets, planning and verification rules
 - **Safe by default**: project sandbox, diff previews, approvals for dangerous commands and deletions, undo, secret masking
@@ -66,7 +67,9 @@ This uses [electron-builder](https://www.electron.build/) to create an installer
 
 ## Using LocalAI
 
-1. **Open a project folder** (sidebar → *Project* → folder icon). The AI can only work inside this folder.
+1. **Open a project folder** (sidebar → *Project* → folder icon). The AI works freely inside this folder.
+   With no folder open, it still works from your home folder (e.g. *"make a folder called notes on my
+   Desktop"*), but asks before every file access and command.
 2. **Pick an AI and an effort level** with the two selectors under the message box. The Ollama model
    (top right) is shared by all AIs. Switching AIs is instant and never downloads anything.
 3. **Describe a task**, e.g. *"Run the tests and fix whatever fails"*. Attach files with the paperclip
@@ -75,8 +78,11 @@ This uses [electron-builder](https://www.electron.build/) to create an installer
    checklist, and a status bar with the step, time budget and current action.
 5. **Approve or reject** proposed edits (shown as diffs) and commands. *Apply all edits in this task*
    skips further edit prompts for the current task only.
-6. **Undo** any file change from its card in the chat. **Stop** a task at any time with the stop button or `Esc`.
-7. Toggle the **terminal panel** (the `>_` button, or Ctrl + backtick) to see command output or run your own
+6. **Send messages while it works**: just type and press Enter. Your message shows as *queued* and the AI reads
+   it at its next step, so you can correct or extend the task without stopping it.
+7. **Undo** any file change (edits, new files, deletions, new folders, moves) from its card in the chat.
+   **Stop** a task at any time with the red stop button or `Esc`.
+8. Toggle the **terminal panel** (the `>_` button, or Ctrl + backtick) to see command output or run your own
    commands. If one fails, click **Ask AI to fix**.
 
 Shortcuts: `Enter` send · `Shift+Enter` new line · `Esc` stop · `Ctrl+N` new chat · `Ctrl+,` settings · ``Ctrl+` `` (backtick) terminal.
@@ -137,7 +143,8 @@ instruction in the prompt:
 ## Safety
 
 - **Project sandbox**: paths are resolved against the project folder, and symlinks are followed. Anything
-  outside it needs your explicit approval each time.
+  outside it needs your explicit approval each time. You can still give the AI access to any file on your
+  computer this way, one approval at a time. With no project open, every file access and command asks.
 - **Diff previews** for every edit. Edits ask first unless the persona is set to auto-apply.
 - **Always confirmed**: deleting files and potentially dangerous commands. The approval card lists the
   reason, e.g. deletes files, `git push` or `reset --hard`, system or registry changes, downloads piped to
@@ -175,6 +182,8 @@ instruction in the prompt:
 | Agent stops early | Raise the effort level or its limits (Settings → Effort), or press **Continue**. |
 | Commands hang | Servers and watch modes never exit; they are stopped at the timeout. Ask for a one-off build or test. |
 | Weird tool behaviour | Use a model with native tool calling (`qwen2.5-coder`, `qwen3`, `llama3.1`). |
+| *"As an AI I can't access files"* | Pick a model with the **tools** badge in the model menu. Small or old models sometimes ignore their tools. |
+| Web search fails | `web_search` uses DuckDuckGo. Check your connection, or give the AI a URL to read with `fetch_url`. |
 
 ---
 
@@ -194,7 +203,8 @@ src/
     changes.js          Backup journal and undo
     shell.js            Cross-platform command runner (timeouts, kill tree, UTF-8)
     store.js            Settings and chat persistence
-    tools/              Tool registry and tools (files, command, web, plan)
+    tools/              Tool registry and tools: files (list/read/search/write/edit/delete/
+                        create_folder/move_path), run_command, web_search, fetch_url, update_plan
   main/                 Electron main process (IPC, windows) and preload bridge
   renderer/             UI: plain HTML/CSS/JS (chat, selectors, settings, terminal)
 test/                   node:test unit and integration tests, mock Ollama server, Electron E2E

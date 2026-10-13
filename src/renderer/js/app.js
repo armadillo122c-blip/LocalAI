@@ -202,7 +202,7 @@
   }
 
   async function refreshChats() {
-    const list = await api.listChats(state.project);
+    const list = await api.listChats();
     state.chats = Array.isArray(list) ? list : [];
     renderChatList();
   }
@@ -216,11 +216,12 @@
     }
     for (const c of state.chats) {
       const p = state.settings.personas.find((x) => x.id === c.personaId);
+      const where = c.projectPath ? basename(c.projectPath) : 'No project';
       const item = h(
         'div.list-item' + (state.chat?.id === c.id ? '.active' : ''),
-        { title: `${c.title}\n${relativeTime(c.updatedAt)}`, on: { click: () => openChat(c.id), dblclick: () => renameChat(c) } },
+        { title: `${c.title}\n${where} · ${relativeTime(c.updatedAt)}`, on: { click: () => openChat(c.id), dblclick: () => renameChat(c) } },
         state.running === c.id ? h('span.dot-running') : h('span', { html: icon(p?.icon || 'chat'), style: { color: p?.color || '' } }),
-        h('span.label', { text: c.title }),
+        h('span.label', {}, c.title, h('span.chat-where', { text: where })),
         h('button.icon-btn.item-action', {
           html: icon('trash'),
           title: 'Delete chat',
@@ -463,7 +464,7 @@
     const t = $('#chatTitle');
     t.innerHTML = '';
     t.append(document.createTextNode(state.chat?.title || 'New chat'));
-    if (state.project) t.append(h('span.sub', { text: basename(state.project) }));
+    t.append(h('span.sub', { text: state.project ? basename(state.project) : 'No project · home folder' }));
   }
 
   function renderThread() {
@@ -549,7 +550,15 @@
       ),
     );
     if (!state.project) {
-      el.append(h('div.welcome-project', {}, h('span', { html: icon('folder') }), 'Open a project folder so the AI can read, edit and run code.', h('button.btn.small.primary', { text: 'Open folder', on: { click: pickProject } })));
+      el.append(
+        h(
+          'div.welcome-project',
+          {},
+          h('span', { html: icon('folder') }),
+          h('span', { text: `No project open: the AI works from your home folder${state.info.home ? ` (${state.info.home})` : ''} and asks before each file access or command. Open a folder to let it work freely inside it.` }),
+          h('button.btn.small.primary', { text: 'Open folder', on: { click: pickProject } }),
+        ),
+      );
     }
     return el;
   }
@@ -698,7 +707,7 @@
     const elapsed = Date.now() - st.startedAt - (st.pausedMs || 0);
     const pct = st.maxSteps ? Math.min(100, (st.step / st.maxSteps) * 100) : 0;
     bar.innerHTML = '';
-    bar.append(
+    const parts = [
       st.phase === 'approval' ? h('span', { html: icon('alert'), style: { color: 'var(--yellow)', display: 'grid' } }) : h('span.spinner'),
       h('span.phase', { text: PHASES[st.phase] || 'Working' }),
       h('span.pill', { text: `${st.effortLabel || ''} effort` }),
@@ -707,7 +716,8 @@
       h('span', { text: `${formatDuration(elapsed)} / ${st.maxMinutes}:00` }),
       st.plan ? h('span.pill', { text: `Plan ${st.plan.done}/${st.plan.total}` }) : null,
       h('span.detail', { text: st.detail || '', title: st.detail || '' }),
-    );
+    ];
+    bar.append(...parts.filter(Boolean));
     if (!statusTick) statusTick = setInterval(renderStatus, 1000);
   }
 
@@ -722,18 +732,13 @@
 
   function updateComposer() {
     const btn = $('#sendBtn');
-    const runningHere = state.running && state.chat && state.running === state.chat.id;
-    if (runningHere) {
-      btn.className = 'send-btn stop';
-      btn.innerHTML = icon('stop');
-      btn.title = 'Stop (Esc)';
-      btn.disabled = false;
-    } else {
-      btn.className = 'send-btn';
-      btn.innerHTML = icon('send');
-      btn.title = 'Send (Enter)';
-      btn.disabled = !!state.running || (!$('#input').value.trim() && !state.attachments.length);
-    }
+    const runningHere = !!(state.running && state.chat && state.running === state.chat.id);
+    const hasInput = !!($('#input').value.trim() || state.attachments.length);
+    $('#stopBtn').classList.toggle('hidden', !runningHere);
+    btn.innerHTML = icon('send');
+    btn.title = runningHere ? 'Send now — the AI reads it at its next step (Enter)' : 'Send (Enter)';
+    btn.disabled = !hasInput || (!!state.running && !runningHere);
+    $('#input').placeholder = runningHere ? 'Message the AI while it works — it reads this at its next step…' : 'Ask a question or describe a coding task…';
   }
 
   function renderAttachments() {
@@ -772,13 +777,14 @@
   }
 
   async function send(textOverride) {
-    if (state.running) {
-      toast('A task is already running. Stop it first.', 'error');
-      return;
-    }
     const input = $('#input');
     const text = (textOverride ?? input.value).trim();
     if (!text && !state.attachments.length) return;
+    if (state.running && state.chat?.id === state.running) return queueMessage(text);
+    if (state.running) {
+      toast('Another chat is still working. Stop it first, or wait for it to finish.', 'error');
+      return;
+    }
     if (state.ollama.ok === false) {
       toast("Ollama isn't running. Start it and try again.", 'error');
       return;
@@ -817,6 +823,22 @@
     refreshChats();
   }
 
+  // Message for the task that is running in this chat: it is shown at once and read at the next step.
+  async function queueMessage(text) {
+    const attachments = state.attachments.map(({ name, kind, content, data }) => ({ name, kind, content, data }));
+    const input = $('#input');
+    input.value = '';
+    state.attachments = [];
+    renderAttachments();
+    autosize();
+    const p = persona();
+    const res = await api.send({ chatId: state.chat.id, text: text || 'See the attached files.', attachments, projectPath: state.project, personaId: p.id, effort: state.settings.effort, model: state.settings.model });
+    if (res?.error) {
+      toast(res.error, 'error');
+      setInput(text);
+    }
+  }
+
   function stop() {
     if (state.running) api.stop(state.running);
   }
@@ -830,6 +852,7 @@
     $('#settingsBtn').innerHTML = icon('settings');
     $('#terminalToggle').innerHTML = icon('terminal');
     $('#attachBtn').innerHTML = icon('paperclip');
+    $('#stopBtn').innerHTML = icon('stop');
   }
 
   function wire() {
@@ -842,14 +865,15 @@
     $('#effortSelector').addEventListener('click', openEffortPicker);
     $('#terminalToggle').addEventListener('click', () => LA.terminal.toggle());
     $('#attachBtn').addEventListener('click', async () => addAttachments(await api.pickAttachments(state.project)));
-    $('#sendBtn').addEventListener('click', () => (state.running && state.chat?.id === state.running ? stop() : send()));
+    $('#sendBtn').addEventListener('click', () => send());
+    $('#stopBtn').addEventListener('click', stop);
 
     const input = $('#input');
     input.addEventListener('input', autosize);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
-        if (!state.running) send();
+        send();
       }
     });
 

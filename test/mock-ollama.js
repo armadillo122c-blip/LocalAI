@@ -47,6 +47,7 @@ const SCRIPTS = {
     { text: 'I wrote notes.txt.' },
   ],
   delete: [{ calls: [call('delete_file', { path: 'old.txt' })] }, { text: 'Deleted old.txt.' }],
+  folder: [{ calls: [call('create_folder', { path: 'demo-folder' })] }, { text: 'Created the folder **demo-folder**.' }],
   danger: [{ calls: [call('run_command', { command: 'rm -rf build' })] }, { text: 'Cleaned the build folder.' }],
   outside: [{ calls: [call('write_file', { path: '../outside.txt', content: 'x' })] }, { text: 'Tried to write outside.' }],
   slow: [{ text: 'Working on it. '.repeat(400), slow: true }],
@@ -59,6 +60,7 @@ function pickScript(text) {
   if (t.includes('fix') || t.includes('bug')) return 'bug';
   if (t.includes('notes')) return 'unverified';
   if (t.includes('delete')) return 'delete';
+  if (t.includes('folder')) return 'folder';
   if (t.includes('dangerous')) return 'danger';
   if (t.includes('outside')) return 'outside';
   if (t.includes('slow')) return 'slow';

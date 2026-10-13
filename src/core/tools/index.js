@@ -11,7 +11,7 @@
 
 const files = require('./files');
 const { runCommandTool } = require('./command');
-const { fetchUrlTool } = require('./web');
+const { fetchUrlTool, webSearchTool } = require('./web');
 const { updatePlanTool } = require('./plan');
 
 class ToolRegistry {
@@ -68,7 +68,10 @@ function createDefaultRegistry() {
     .register(files.writeFile)
     .register(files.editFile)
     .register(files.deleteFile)
+    .register(files.createFolder)
+    .register(files.movePath)
     .register(runCommandTool)
+    .register(webSearchTool)
     .register(fetchUrlTool)
     .register(updatePlanTool);
 }

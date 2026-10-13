@@ -26,12 +26,18 @@ async function exists(p) {
 }
 
 // Ask for approval when a path is outside the project or points at a secret file.
+function outsideMessage(ctx, target) {
+  return ctx.noProject
+    ? `No project folder is open, so LocalAI asks before each access:\n${target.abs}`
+    : `The AI wants to access a path outside your project folder:\n${target.abs}`;
+}
+
 async function guardRead(ctx, target, toolLabel) {
   if (!target.inside) {
     const res = await ctx.approve({
       kind: 'outside',
-      title: `${toolLabel} outside the project`,
-      message: `The AI wants to access a path outside your project folder:\n${target.abs}`,
+      title: ctx.noProject ? toolLabel : `${toolLabel} outside the project`,
+      message: outsideMessage(ctx, target),
       blanket: false,
     });
     if (!res.approved) return rejection('access outside the project', res.feedback);
@@ -52,8 +58,8 @@ async function guardWrite(ctx, target, approval) {
   if (!target.inside) {
     approval.kind = 'outside';
     approval.blanket = false;
-    approval.title = `${approval.title} (OUTSIDE PROJECT)`;
-    approval.message = `Warning: this path is outside your project folder:\n${target.abs}`;
+    if (!ctx.noProject) approval.title = `${approval.title} (OUTSIDE PROJECT)`;
+    approval.message = ctx.noProject ? outsideMessage(ctx, target) : `Warning: this path is outside your project folder:\n${target.abs}`;
   } else if (isProtectedPath(target.rel)) {
     approval.blanket = false;
     approval.message = 'This path is inside the .git folder.';
@@ -524,4 +530,83 @@ const deleteFile = {
   },
 };
 
-module.exports = { listFiles, readFile, searchFiles, writeFile, editFile, deleteFile, IGNORED_DIRS, fuzzyLineMatch, globToRegExp };
+// ---------------------------------------------------------- create_folder
+
+const createFolder = {
+  name: 'create_folder',
+  category: 'edit',
+  description: 'Create a folder, including any missing parent folders.',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: 'Folder path (relative to the working folder, or absolute)' },
+    },
+    required: ['path'],
+  },
+  summarize: (a) => a.path,
+  async run(args, ctx) {
+    const target = ctx.resolve(args.path);
+    const st = await fsp.stat(target.abs).catch(() => null);
+    if (st?.isDirectory()) return { ok: true, output: `The folder ${target.rel} already exists.` };
+    if (st) return { ok: false, output: `${target.rel} already exists and is a file.` };
+    const blocked = await guardWrite(ctx, target, {
+      kind: 'edit',
+      category: 'edit',
+      title: `Create folder ${target.rel}`,
+      path: target.rel,
+      message: `New folder: ${target.abs}`,
+      blanket: true,
+    });
+    if (blocked) return blocked;
+    const first = await fsp.mkdir(target.abs, { recursive: true });
+    const change = await ctx.recordChange({ kind: 'mkdir', file: first || target.abs, tool: 'create_folder' });
+    return { ok: true, output: `Created folder ${target.rel}.`, display: { path: target.rel, change } };
+  },
+};
+
+// -------------------------------------------------------------- move_path
+
+const movePath = {
+  name: 'move_path',
+  category: 'edit',
+  description: 'Move or rename a file or folder. Fails if the destination already exists.',
+  parameters: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'Current path' },
+      to: { type: 'string', description: 'New path' },
+    },
+    required: ['from', 'to'],
+  },
+  summarize: (a) => `${a.from} → ${a.to}`,
+  async run(args, ctx) {
+    const src = ctx.resolve(args.from ?? args.source ?? args.path);
+    const dst = ctx.resolve(args.to ?? args.destination ?? args.new_path);
+    const st = await fsp.stat(src.abs).catch(() => null);
+    if (!st) return { ok: false, output: `Not found: ${args.from}` };
+    if (await exists(dst.abs)) return { ok: false, output: `${dst.rel} already exists. Choose another name or delete it first.` };
+    // Ask about the riskier of the two paths (outside the project wins).
+    const target = !src.inside ? src : dst;
+    const blocked = await guardWrite(ctx, target, {
+      kind: 'edit',
+      category: 'edit',
+      title: `Move ${src.rel} → ${dst.rel}`,
+      path: dst.rel,
+      message: `${src.abs}\n→ ${dst.abs}`,
+      blanket: true,
+    });
+    if (blocked) return blocked;
+    await fsp.mkdir(path.dirname(dst.abs), { recursive: true });
+    try {
+      await fsp.rename(src.abs, dst.abs);
+    } catch (err) {
+      if (err.code !== 'EXDEV') throw err;
+      await fsp.cp(src.abs, dst.abs, { recursive: true, errorOnExist: true });
+      await fsp.rm(src.abs, { recursive: true, force: true });
+    }
+    const change = await ctx.recordChange({ kind: 'move', from: src.abs, file: dst.abs, tool: 'move_path' });
+    return { ok: true, changed: st.isFile() ? dst.abs : undefined, output: `Moved ${src.rel} to ${dst.rel}.`, display: { path: dst.rel, change } };
+  },
+};
+
+module.exports = { listFiles, readFile, searchFiles, writeFile, editFile, deleteFile, createFolder, movePath, IGNORED_DIRS, fuzzyLineMatch, globToRegExp };

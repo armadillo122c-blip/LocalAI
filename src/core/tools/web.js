@@ -136,4 +136,94 @@ const fetchUrlTool = {
   },
 };
 
-module.exports = { fetchUrlTool, htmlToText, isPrivateHost, rewriteUrl };
+// ------------------------------------------------------------- web_search
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// DuckDuckGo wraps result links as //duckduckgo.com/l/?uddg=<encoded url>.
+function resultUrl(href) {
+  const h = decodeEntities(href);
+  const m = h.match(/[?&]uddg=([^&]+)/);
+  if (m) return decodeURIComponent(m[1]);
+  if (h.startsWith('//')) return 'https:' + h;
+  return h;
+}
+
+/** Parse DuckDuckGo's HTML (html.duckduckgo.com) or lite (lite.duckduckgo.com) result page. */
+function parseSearchResults(html, max = 8) {
+  const results = [];
+  const blocks = html.split(/<div[^>]+class="[^"]*\bresult\b[^"]*"/i).slice(1);
+  for (const b of blocks) {
+    const a = b.match(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i) || b.match(/<a[^>]*href="([^"]+)"[^>]*class="[^"]*result__a[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!a) continue;
+    const snip = b.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(a|div|td)>/i);
+    const url = resultUrl(a[1]);
+    if (/duckduckgo\.com\/y\.js|\/\/duckduckgo\.com\/?$/.test(url)) continue; // ads
+    results.push({ title: decodeEntities(a[2]), url, snippet: snip ? decodeEntities(snip[1]) : '' });
+    if (results.length >= max) return results;
+  }
+  if (!results.length) {
+    // lite layout: <a class="result-link" href="...">title</a> ... <td class="result-snippet">...</td>
+    const re = /<a[^>]*href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>[\s\S]*?class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/gi;
+    let m;
+    while ((m = re.exec(html)) && results.length < max) {
+      results.push({ title: decodeEntities(m[2]), url: resultUrl(m[1]), snippet: decodeEntities(m[3]) });
+    }
+  }
+  return results;
+}
+
+const webSearchTool = {
+  name: 'web_search',
+  category: 'web',
+  description: 'Search the web (DuckDuckGo) and get the top results with titles, links and snippets. Use fetch_url afterwards to read a result.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'What to search for' },
+    },
+    required: ['query'],
+  },
+  summarize: (a) => a.query,
+  async run(args, ctx) {
+    const query = String(args.query || args.q || '').trim();
+    if (!query) return { ok: false, output: 'query is required' };
+    if (ctx.permissions.web !== 'auto' || ctx.forceApproval) {
+      const res = await ctx.approve({ kind: 'web', category: 'web', title: 'Search the web?', url: `Search: ${query}`, reasons: [], blanket: true });
+      if (!res.approved) return { ok: false, rejected: true, output: 'The user rejected this search.' + (res.feedback ? ` User feedback: ${res.feedback}` : '') };
+    }
+    const endpoints = [
+      `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+      `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+    ];
+    let lastError = '';
+    for (const url of endpoints) {
+      try {
+        const res = await get(url, { signal: ctx.signal });
+        const results = parseSearchResults(res.body);
+        if (results.length) {
+          const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`).join('\n');
+          return { ok: true, output: `Results for "${query}":\n${text}` };
+        }
+        lastError = `HTTP ${res.status}, no results found`;
+      } catch (err) {
+        lastError = err.message;
+      }
+    }
+    return { ok: false, output: `Web search failed (${lastError}). Check the internet connection, or use fetch_url with a known documentation URL.` };
+  },
+};
+
+module.exports = { fetchUrlTool, webSearchTool, parseSearchResults, htmlToText, isPrivateHost, rewriteUrl };

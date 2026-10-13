@@ -149,6 +149,7 @@ function registerIpc() {
   handle('app:info', () => ({
     platform: process.platform,
     version: app.getVersion(),
+    home: app.getPath('home'),
     userData: USER_DATA,
     efforts: EFFORT_LEVELS.map(({ id, label, summary, maxSteps, maxMinutes, planRequired, verifyRetries, selfReview, think }) => ({ id, label, summary, maxSteps, maxMinutes, planRequired, verifyRetries, selfReview, think })),
     shells: Object.entries(SHELLS)
@@ -226,7 +227,7 @@ function registerIpc() {
   });
 
   // chats
-  handle('chats:list', (projectPath) => store.listChats(projectPath || null));
+  handle('chats:list', () => store.listAllChats());
   handle('chats:load', async (id) => {
     const chat = await getChat(id);
     if (!runs.has(id)) {
@@ -262,11 +263,12 @@ function registerIpc() {
   // agent
   handle('agent:send', async ({ chatId, newChatId, text, attachments = [], projectPath, personaId, effort, model }) => {
     const settings = store.settings;
-    if (runs.size) {
-      const busy = [...runs.keys()][0];
-      if (busy !== chatId) throw new Error('Another task is still running. Stop it first.');
-      throw new Error('This chat is already working. Wait for it or press Stop.');
+    if (chatId && runs.has(chatId)) {
+      // Message sent while the agent is working: hand it to the running task.
+      if (runs.get(chatId).run.enqueue({ text, attachments })) return { chatId, queued: true, title: runs.get(chatId).chat.title };
+      throw new Error('The task is just finishing. Send your message again in a moment.');
     }
+    if (runs.size) throw new Error('Another chat is still working. Stop it first, or wait for it to finish.');
     const persona = settings.personas.find((p) => p.id === personaId) || settings.personas[0];
     const useModel = persona.model || model || settings.model;
     if (!useModel) throw new Error('No model selected. Pick an Ollama model first.');
@@ -290,6 +292,8 @@ function registerIpc() {
       model: useModel,
       settings,
       root,
+      homeDir: app.getPath('home'),
+      knownFolders: knownFolders(),
       emit: (ev) => {
         if (ev.type === 'terminal') send('terminal:event', ev.event);
         else send('agent:event', { chatId: chat.id, ...ev });
@@ -376,6 +380,18 @@ function registerIpc() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return true;
   });
+}
+
+function knownFolders() {
+  const out = {};
+  for (const [name, key] of [['Desktop', 'desktop'], ['Documents', 'documents'], ['Downloads', 'downloads']]) {
+    try {
+      out[name] = app.getPath(key);
+    } catch {
+      /* not available on this system */
+    }
+  }
+  return out;
 }
 
 async function readAttachments(paths) {

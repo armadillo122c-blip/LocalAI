@@ -135,6 +135,11 @@ class Store {
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  async listAllChats() {
+    const index = await this.loadIndex();
+    return [...index].sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
   newChat({ projectPath = null, title = 'New chat' } = {}) {
     const now = Date.now();
     return { id: uid('chat_'), title, projectPath, createdAt: now, updatedAt: now, messages: [], items: [] };

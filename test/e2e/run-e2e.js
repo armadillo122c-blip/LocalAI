@@ -33,6 +33,7 @@ async function main() {
   const mock = await startMockOllama({ delayMs: 12 });
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'localai-e2e-data-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'demo-project-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'localai-e2e-home-'));
   fs.writeFileSync(path.join(project, 'math.js'), 'function add(a, b) {\n  return a - b;\n}\nmodule.exports = { add };\n');
   fs.writeFileSync(path.join(project, 'test.js'), "const { add } = require('./math');\nif (add(2, 2) !== 4) { console.error('FAIL: add(2,2) = ' + add(2, 2)); process.exit(1); }\nconsole.log('PASS: add works');\n");
   fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ name: 'demo-project', version: '1.0.0', scripts: { test: 'node test.js' } }, null, 2));
@@ -45,7 +46,7 @@ async function main() {
   const app = await electron.launch({
     executablePath: electronPath,
     args: ['--no-sandbox', ROOT],
-    env: { ...process.env, LOCALAI_USER_DATA: userData, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
+    env: { ...process.env, HOME: home, LOCALAI_USER_DATA: userData, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
   });
   const page = await app.firstWindow();
   const errors = [];
@@ -90,7 +91,7 @@ async function main() {
     step('approval requested for edit');
     await shot('04-approval-diff');
     await page.click('.approval-box .btn.primary');
-    await page.waitForSelector('#sendBtn:not(.stop)', { timeout: 30000 });
+    await page.waitForSelector('#stopBtn.hidden', { state: 'attached', timeout: 30000 });
     await page.waitForTimeout(300);
     const fixed = fs.readFileSync(path.join(project, 'math.js'), 'utf8');
     assert.match(fixed, /a \+ b/, 'math.js fixed');
@@ -120,12 +121,30 @@ async function main() {
     await page.click('#newChatBtn');
     await page.fill('#input', 'Do something slow');
     await page.keyboard.press('Enter');
-    await page.waitForSelector('#sendBtn.stop');
-    await page.waitForTimeout(500);
+    await page.waitForSelector('#stopBtn:not(.hidden)');
+    await page.waitForTimeout(400);
+    // message while the AI is working
+    await page.fill('#input', 'Also add a README please');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.bubble.queued');
+    step('message sent while working is queued');
     await shot('07-streaming');
-    await page.click('#sendBtn.stop');
+    await page.click('#stopBtn');
     await page.waitForSelector('.notice:has-text("Stopped.")', { timeout: 10000 });
+    await page.waitForSelector('.bubble.queued', { state: 'detached' });
     step('stop button cancelled the task');
+
+    // no project open: tools still work, each access asks
+    await page.click('.project-card button[title="Close project"]');
+    await page.waitForSelector('.welcome-project:has-text("home folder")');
+    await page.fill('#input', 'Make a folder for my stuff');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.approval-box', { timeout: 15000 });
+    await shot('07b-no-project-approval');
+    await page.click('.approval-box .btn.danger, .approval-box .btn.primary');
+    await page.waitForSelector('#stopBtn.hidden', { state: 'attached', timeout: 15000 });
+    assert.ok(fs.statSync(path.join(home, 'demo-folder')).isDirectory(), 'folder created in home');
+    step('without a project the AI creates a folder after approval');
 
     // settings
     await page.click('#settingsBtn');

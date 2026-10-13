@@ -13,6 +13,9 @@
     write_file: { label: 'Write', icon: 'edit' },
     edit_file: { label: 'Edit', icon: 'edit' },
     delete_file: { label: 'Delete', icon: 'trash' },
+    create_folder: { label: 'New folder', icon: 'folderPlus' },
+    move_path: { label: 'Move', icon: 'folder' },
+    web_search: { label: 'Web search', icon: 'search' },
     run_command: { label: 'Run', icon: 'terminal' },
     fetch_url: { label: 'Fetch', icon: 'globe' },
     update_plan: { label: 'Plan', icon: 'clipboard' },
@@ -53,7 +56,8 @@
   }
 
   function renderUser(item) {
-    const bubble = h('div.bubble', {}, item.text || '');
+    const bubble = h('div.bubble' + (item.queued ? '.queued' : ''), {}, item.text || '');
+    if (item.queued) bubble.append(h('div.queued-label', { text: 'Queued — the AI reads this at its next step' }));
     if (item.attachments?.length) {
       bubble.append(
         h(
@@ -98,6 +102,7 @@
     if (item.status === 'approval') return true;
     if (item.name === 'run_command') return item.status === 'running' || item.status === 'error';
     if (item.display?.diff && (item.name === 'edit_file' || item.name === 'write_file')) return item.status !== 'rejected';
+    if (item.name === 'web_search') return item.status === 'ok';
     return false;
   }
 

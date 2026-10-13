@@ -21,7 +21,7 @@ test.after(async () => {
   await mock.close();
 });
 
-function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 'medium', decide = () => 'approve', permissions, settingsPatch = {}, files = {} }) {
+function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 'medium', decide = () => 'approve', permissions, settingsPatch = {}, files = {}, noProject = false }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'localai-agent-'));
   for (const [f, c] of Object.entries(files)) fs.writeFileSync(path.join(root, f), c);
   const persona = builtinPersona(personaId);
@@ -38,7 +38,9 @@ function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 
     effortId: effort,
     model,
     settings: { ...defaultSettings(), ...settingsPatch },
-    root,
+    root: noProject ? null : root,
+    homeDir: root,
+    knownFolders: { Desktop: path.join(root, 'Desktop') },
     emit: (ev) => events.push(ev),
     requestApproval: async (req) => {
       approvals.push(req);
@@ -230,4 +232,53 @@ test('missing model suggests ollama pull', async () => {
   await t.start();
   const n = t.chat.items.find((i) => i.type === 'notice' && i.level === 'error');
   assert.match(n.hint, /ollama pull nope:1b/);
+});
+
+test('without a project the tools still work, asking before each access', async () => {
+  const t = makeRun({ text: 'Make a folder for my stuff', noProject: true, permissions: { edit: 'auto' } });
+  const reason = await t.start();
+  assert.equal(reason, 'done');
+  assert.ok(fs.statSync(path.join(t.root, 'demo-folder')).isDirectory());
+  assert.equal(t.approvals.length, 1);
+  assert.equal(t.approvals[0].kind, 'outside');
+  assert.equal(t.approvals[0].blanket, false);
+  const req = mock.requests.filter((r) => r.path === '/api/chat').pop();
+  const system = req.body.messages[0].content;
+  assert.match(system, /Your capabilities/);
+  assert.match(system, /home folder/);
+  assert.match(system, /Desktop: /);
+  assert.ok(req.body.tools.some((x) => x.function.name === 'create_folder'));
+});
+
+test('rejected no-project access does nothing', async () => {
+  const t = makeRun({ text: 'Make a folder for my stuff', noProject: true, decide: () => 'reject' });
+  await t.start();
+  assert.equal(fs.existsSync(path.join(t.root, 'demo-folder')), false);
+});
+
+test('messages sent while working are read at the next step', async () => {
+  const t = makeRun({ text: 'be slow please' });
+  const p = t.start();
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(t.run.enqueue({ text: 'also say hi' }), true);
+  const queued = t.chat.items.filter((i) => i.type === 'user').pop();
+  assert.equal(queued.queued, true);
+  const reason = await p;
+  assert.equal(reason, 'done');
+  assert.equal(queued.queued, false);
+  const userMsgs = t.chat.messages.filter((m) => m.role === 'user').map((m) => m.content);
+  assert.deepEqual(userMsgs, ['be slow please', 'also say hi']);
+  const last = t.chat.items.filter((i) => i.type === 'assistant').pop();
+  assert.match(last.text, /also say hi/);
+  assert.equal(t.run.enqueue({ text: 'too late' }), false);
+});
+
+test('messages queued before Stop are kept in the history', async () => {
+  const t = makeRun({ text: 'be slow please' });
+  const p = t.start();
+  await new Promise((r) => setTimeout(r, 200));
+  t.run.enqueue({ text: 'actually, change of plan' });
+  t.run.stop();
+  assert.equal(await p, 'stopped');
+  assert.ok(t.chat.messages.some((m) => m.role === 'user' && m.content === 'actually, change of plan'));
 });
