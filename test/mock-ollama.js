@@ -48,6 +48,11 @@ const SCRIPTS = {
   ],
   delete: [{ calls: [call('delete_file', { path: 'old.txt' })] }, { text: 'Deleted old.txt.' }],
   folder: [{ calls: [call('create_folder', { path: 'demo-folder' })] }, { text: 'Created the folder **demo-folder**.' }],
+  refuse: [
+    { text: "I'm sorry, but I can't perform actions directly on your computer. Here are the steps:\n\n1. Open File Explorer." },
+    { text: 'I can help guide you on how to create a test folder.' },
+    { text: 'Done — I created **test-folder**.' },
+  ],
   danger: [{ calls: [call('run_command', { command: 'rm -rf build' })] }, { text: 'Cleaned the build folder.' }],
   outside: [{ calls: [call('write_file', { path: '../outside.txt', content: 'x' })] }, { text: 'Tried to write outside.' }],
   slow: [{ text: 'Working on it. '.repeat(400), slow: true }],
@@ -59,6 +64,7 @@ function pickScript(text) {
   if (t.includes('hello')) return 'hello';
   if (t.includes('fix') || t.includes('bug')) return 'bug';
   if (t.includes('notes')) return 'unverified';
+  if (t.includes('desktop')) return 'refuse';
   if (t.includes('delete')) return 'delete';
   if (t.includes('folder')) return 'folder';
   if (t.includes('dangerous')) return 'danger';
@@ -75,6 +81,9 @@ function decideTurn(body) {
     return { text: 'Verifying.', calls: [call('run_command', { command: 'node -e "console.log(1)"' })] };
   }
   if (last.role === 'user' && last.content.startsWith('[LocalAI] Final review')) return { text: 'Reviewed my changes: everything looks correct.' };
+  if (last.role === 'user' && last.content.startsWith('[LocalAI] You DO have working tools')) {
+    return { calls: [call('create_folder', { path: 'test-folder' })] };
+  }
   if (last.role === 'user' && last.content.includes('budget for this task is used up')) return { text: 'Summary: I ran out of budget while exploring.' };
   const req = lastUserRequest(messages);
   const name = pickScript(req.text);

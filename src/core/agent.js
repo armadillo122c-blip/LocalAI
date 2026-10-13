@@ -10,6 +10,7 @@ const { buildSystemPrompt } = require('./prompt');
 const { fitMessages, toolLimits } = require('./context');
 const { parseTextToolCalls, ThinkSplitter, tryParseJson } = require('./toolcalls');
 const { resolveEffort, thinkParam } = require('./effort');
+const { shouldNudgeToolUse } = require('./guards');
 const { resolveProjectPath, toPosix } = require('./safety');
 const { uid, estimateTokens, truncate, abortError } = require('./util');
 
@@ -52,6 +53,8 @@ class AgentRun {
     this.signal = this.controller.signal;
     this.blanket = new Set();
     this.queue = [];
+    this.toolNudges = 0;
+    this.currentRequest = '';
     this.closed = false;
     this.extraMs = 0;
     this.pausedMs = 0;
@@ -89,6 +92,8 @@ class AgentRun {
     for (const q of this.queue.splice(0)) {
       this.chat.messages.push(this.buildUserMessage(q.text, q.attachments));
       this.updateItem(q.item, { queued: false });
+      this.currentRequest = q.text;
+      this.toolNudges = 0;
     }
     // New instructions get some room even if the budget was nearly used.
     const minSteps = Math.min(this.effort.maxSteps, 8);
@@ -186,6 +191,7 @@ class AgentRun {
       this.tools = this.registry.available({ permissions: this.permissions, hasProject: !!(this.root || this.homeDir) });
 
       this.chat.messages.push(this.buildUserMessage(text, attachments));
+      this.currentRequest = text;
       this.save();
       reason = await this.loop();
     } catch (err) {
@@ -243,6 +249,18 @@ class AgentRun {
 
       if (!resp.calls.length) {
         if (this.queue.length) continue; // the user sent something meanwhile: keep going
+        if (this.toolNudges < 2 && this.tools.some((t) => t.category !== 'plan') && shouldNudgeToolUse({ request: this.currentRequest, reply: resp.text, usedTools: this.toolCallCount > 0 })) {
+          // The model says it can't act (or explains manual steps) although it has tools for it.
+          this.toolNudges++;
+          const names = this.tools.map((t) => t.name).join(', ');
+          this.chat.messages.push({
+            role: 'user',
+            content: `[LocalAI] You DO have working tools on this computer: ${names}. Do not tell the user to do it themselves and do not say you can't access their computer. Call the right tool now to do what they asked. (If you are declining for a different reason, explain that reason instead.)`,
+          });
+          this.addItem({ type: 'notice', level: 'info', text: 'The model answered without using its tools — reminding it that it can act on your computer.' });
+          this.save();
+          continue;
+        }
         const gate = this.finishGate(resp.text);
         if (gate) {
           this.chat.messages.push({ role: 'user', content: gate.note });

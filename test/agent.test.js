@@ -282,3 +282,13 @@ test('messages queued before Stop are kept in the history', async () => {
   assert.equal(await p, 'stopped');
   assert.ok(t.chat.messages.some((m) => m.role === 'user' && m.content === 'actually, change of plan'));
 });
+
+test('a model that claims it cannot act is sent back to use its tools', async () => {
+  const t = makeRun({ text: 'create a test folder in desktop', permissions: { edit: 'auto' } });
+  const reason = await t.start();
+  assert.equal(reason, 'done');
+  assert.ok(fs.statSync(path.join(t.root, 'test-folder')).isDirectory());
+  const notices = t.chat.items.filter((i) => i.type === 'notice').map((i) => i.text);
+  assert.ok(notices.some((n) => /without using its tools/.test(n)), notices.join('|'));
+  assert.equal(t.run.toolNudges, 1);
+});

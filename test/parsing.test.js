@@ -112,3 +112,14 @@ test('settings are sanitized', () => {
   assert.equal(s.theme, 'dark');
   assert.equal(s.personas.length, BUILTIN_PERSONAS.length);
 });
+
+test('capability-denial and manual-instruction replies are detected', () => {
+  const { shouldNudgeToolUse } = require('../src/core/guards');
+  const steps = 'I can help guide you on how to create a test folder on your desktop. Here are the steps:\n\n1. Open your File Explorer.';
+  const denial = "I'm sorry, but I can't perform actions directly on your computer. I can guide you through the process.";
+  assert.equal(shouldNudgeToolUse({ request: 'create a test folder in desktop', reply: steps, usedTools: false }), true);
+  assert.equal(shouldNudgeToolUse({ request: 'you do it', reply: denial, usedTools: false }), true);
+  assert.equal(shouldNudgeToolUse({ request: 'what is a closure?', reply: 'A closure captures variables from its scope.', usedTools: false }), false);
+  assert.equal(shouldNudgeToolUse({ request: 'create a plan for a todo app', reply: 'Here are the steps: 1. Design the data model', usedTools: false }), false);
+  assert.equal(shouldNudgeToolUse({ request: 'create a folder', reply: 'Created the folder.', usedTools: true }), false);
+});
