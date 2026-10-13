@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LocalAI</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo" id="brandLogo"></div>
+          <div>
+            <div class="brand-name">LocalAI</div>
+            <div class="brand-sub">Local coding agent</div>
+          </div>
+        </div>
+        <button class="btn block" id="newChatBtn" title="New chat (Ctrl+N)"></button>
+
+        <section class="side-section">
+          <div class="side-title">Project <button class="icon-btn" id="openProjectBtn" title="Open project folder"></button></div>
+          <div id="currentProject"></div>
+          <div class="list recent-list" id="recentProjects"></div>
+        </section>
+
+        <section class="side-section grow">
+          <div class="side-title">Chats</div>
+          <div class="list" id="chatList"></div>
+        </section>
+
+        <div class="side-footer">
+          <button class="status-pill" id="ollamaStatus" title="Ollama connection"><span class="status-dot"></span><span>Checking Ollama…</span></button>
+          <button class="icon-btn" id="settingsBtn" title="Settings (Ctrl+,)"></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="chat-title" id="chatTitle">New chat</div>
+          <button class="model-chip" id="modelChip" title="Ollama model used by all AIs"></button>
+          <button class="icon-btn" id="terminalToggle" title="Terminal (Ctrl+`)"></button>
+        </header>
+        <div id="banner"></div>
+        <div class="messages" id="messages"><div class="thread" id="thread"></div></div>
+        <div class="status-bar hidden" id="statusBar"></div>
+        <div class="composer-wrap">
+          <div class="composer" id="composer">
+            <div class="attachment-chips" id="attachmentChips"></div>
+            <textarea id="input" rows="1" placeholder="Ask a question or describe a coding task…"></textarea>
+            <div class="composer-bar">
+              <button class="icon-btn" id="attachBtn" title="Attach files"></button>
+              <button class="selector" id="personaSelector" title="Choose AI"></button>
+              <button class="selector effort" id="effortSelector" title="Effort level"></button>
+              <span class="powered" id="poweredBy"></span>
+              <div class="spacer"></div>
+              <button class="send-btn" id="sendBtn" title="Send (Enter)"></button>
+            </div>
+          </div>
+          <div class="composer-foot">Enter to send · Shift+Enter for a new line · Esc to stop</div>
+        </div>
+        <section class="terminal hidden" id="terminal">
+          <div class="terminal-resize" id="terminalResize"></div>
+          <div class="terminal-head">
+            <span class="title" id="terminalTitle"></span>
+            <span class="cwd" id="terminalCwd"></span>
+            <button class="icon-btn" id="terminalKill" title="Stop running command"></button>
+            <button class="icon-btn" id="terminalClear" title="Clear"></button>
+            <button class="icon-btn" id="terminalClose" title="Close"></button>
+          </div>
+          <pre class="terminal-output" id="terminalOutput"></pre>
+          <div class="terminal-input"><span>&gt;</span><input id="terminalInput" placeholder="Run a command in the project folder" spellcheck="false" /></div>
+        </section>
+      </main>
+    </div>
+    <div id="popoverRoot"></div>
+    <div id="modalRoot"></div>
+    <div class="toasts" id="toasts"></div>
+
+    <script src="js/icons.js"></script>
+    <script src="js/markdown.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/chat.js"></script>
+    <script src="js/terminal.js"></script>
+    <script src="js/settings.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

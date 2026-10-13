@@ -1,0 +1,43 @@
+{
+  "name": "localai",
+  "productName": "LocalAI",
+  "version": "1.0.0",
+  "description": "A lightweight local AI coding agent desktop app powered by Ollama.",
+  "main": "src/main/main.js",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "test:e2e": "node test/e2e/run-e2e.js",
+    "mock-ollama": "node test/mock-ollama.js",
+    "dist": "npx --yes electron-builder@26.15.3 --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0"
+  },
+  "build": {
+    "appId": "dev.localai.app",
+    "productName": "LocalAI",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
