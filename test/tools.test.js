@@ -279,3 +279,11 @@ test('web search results are parsed from DuckDuckGo HTML', () => {
   const lite = `<a rel="nofollow" href="https://example.com/a" class='result-link'>Example A</a></td></tr><tr><td class='result-snippet'>First <b>hit</b></td>`;
   assert.deepEqual(parseSearchResults(lite), [{ title: 'Example A', url: 'https://example.com/a', snippet: 'First hit' }]);
 });
+
+test('a missing working folder gives a clear error instead of "shell not found"', async () => {
+  const { runCommand } = require('../src/core/shell');
+  const res = await runCommand('node -e "1"', { cwd: path.join(os.tmpdir(), 'does-not-exist-' + Date.now()) });
+  assert.equal(res.code, -1);
+  assert.match(res.output, /working folder does not exist/);
+  assert.doesNotMatch(res.output, /not found — pick another shell/);
+});

@@ -48,6 +48,11 @@ const SCRIPTS = {
   ],
   delete: [{ calls: [call('delete_file', { path: 'old.txt' })] }, { text: 'Deleted old.txt.' }],
   folder: [{ calls: [call('create_folder', { path: 'demo-folder' })] }, { text: 'Created the folder **demo-folder**.' }],
+  confirm: [
+    { text: 'Step 1: Create a Python script file named `script.py`.\nStep 2: Run it.\n\nWould you like to proceed with these steps?' },
+    { text: '(unused)' },
+    { text: 'Done — created **script.py**.' },
+  ],
   refuse: [
     { text: "I'm sorry, but I can't perform actions directly on your computer. Here are the steps:\n\n1. Open File Explorer." },
     { text: 'I can help guide you on how to create a test folder.' },
@@ -65,6 +70,7 @@ function pickScript(text) {
   if (t.includes('fix') || t.includes('bug')) return 'bug';
   if (t.includes('notes')) return 'unverified';
   if (t.includes('desktop')) return 'refuse';
+  if (t.includes('python script')) return 'confirm';
   if (t.includes('delete')) return 'delete';
   if (t.includes('folder')) return 'folder';
   if (t.includes('dangerous')) return 'danger';
@@ -81,6 +87,9 @@ function decideTurn(body) {
     return { text: 'Verifying.', calls: [call('run_command', { command: 'node -e "console.log(1)"' })] };
   }
   if (last.role === 'user' && last.content.startsWith('[LocalAI] Final review')) return { text: 'Reviewed my changes: everything looks correct.' };
+  if (last.role === 'user' && last.content.startsWith("[LocalAI] Don't ask whether to proceed")) {
+    return { calls: [call('write_file', { path: 'script.py', content: 'print("hi")\n' })] };
+  }
   if (last.role === 'user' && last.content.startsWith('[LocalAI] You DO have working tools')) {
     return { calls: [call('create_folder', { path: 'test-folder' })] };
   }

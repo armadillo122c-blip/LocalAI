@@ -390,6 +390,11 @@ button { cursor: pointer; }
 .selector .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .selector .chev { width: 13px; height: 13px; color: var(--text-faint); }
 .selector.effort { padding-left: 9px; }
+.selector.perm { padding-left: 9px; }
+.selector.perm .icon { width: 14px; height: 14px; }
+.selector.perm-acceptEdits { color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+.selector.perm-plan { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.selector.perm-bypass { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, var(--border)); background: var(--red-soft); }
 .effort-meter { display: inline-flex; gap: 2px; align-items: flex-end; height: 12px; }
 .effort-meter i { width: 3px; border-radius: 2px; background: var(--border-strong); }
 .effort-meter i:nth-child(1) { height: 4px; } .effort-meter i:nth-child(2) { height: 6px; } .effort-meter i:nth-child(3) { height: 8px; }

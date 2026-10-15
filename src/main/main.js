@@ -261,7 +261,7 @@ function registerIpc() {
   handle('files:read', (paths) => readAttachments(Array.isArray(paths) ? paths : [paths]));
 
   // agent
-  handle('agent:send', async ({ chatId, newChatId, text, attachments = [], projectPath, personaId, effort, model }) => {
+  handle('agent:send', async ({ chatId, newChatId, text, attachments = [], projectPath, personaId, effort, model, permissionMode }) => {
     const settings = store.settings;
     if (chatId && runs.has(chatId)) {
       // Message sent while the agent is working: hand it to the running task.
@@ -289,6 +289,7 @@ function registerIpc() {
       chat,
       persona,
       effortId: effort || settings.effort,
+      permissionMode: permissionMode || settings.permissionMode,
       model: useModel,
       settings,
       root,

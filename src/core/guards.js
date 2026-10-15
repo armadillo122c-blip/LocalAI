@@ -17,6 +17,9 @@ const ACTION_REQUEST = [
   /^\s*(you do it|do it|just do it|go ahead|do that|please do it)\b/i,
 ];
 
+// "Would you like me to proceed?" after being asked to do something.
+const CONFIRM_REPLY = /\b(would you like (?:me )?to (?:proceed|continue|go ahead|start|do (?:this|that|it))|shall i (?:proceed|continue|go ahead|start)|should i (?:proceed|go ahead|continue|start)|do you want me to (?:proceed|continue|go ahead|start|do)|let me know if you(?:'d| would)? (?:like|want) me to (?:proceed|continue|go ahead|start))\b/i;
+
 const INSTRUCTIONS_REPLY = /\b(here are the steps|follow these steps|steps to|you can do this by|you can create|you can make|i can (?:help )?guide you|right-click|open (?:your )?file explorer|open (?:the )?terminal and)\b/i;
 
 function looksLikeCapabilityDenial(reply) {
@@ -30,12 +33,22 @@ function isActionRequest(request) {
 }
 
 /**
- * True when the model answered an action request with a refusal-of-capability
- * or with manual instructions, without having used any tool.
+ * Why the model should be sent back to work, or null:
+ *  'denial'       – claims it can't access the computer
+ *  'instructions' – explains manual steps for an action request without using a tool
+ *  'confirm'      – stops to ask "shall I proceed?" on an action request
  */
-function shouldNudgeToolUse({ request, reply, usedTools }) {
-  if (looksLikeCapabilityDenial(reply)) return true;
-  return !usedTools && isActionRequest(request) && INSTRUCTIONS_REPLY.test(String(reply || ''));
+function nudgeReason({ request, reply, usedTools }) {
+  const text = String(reply || '');
+  if (looksLikeCapabilityDenial(text)) return 'denial';
+  const action = isActionRequest(request);
+  if (!usedTools && action && INSTRUCTIONS_REPLY.test(text)) return 'instructions';
+  if (action && CONFIRM_REPLY.test(text)) return 'confirm';
+  return null;
 }
 
-module.exports = { looksLikeCapabilityDenial, isActionRequest, shouldNudgeToolUse };
+function shouldNudgeToolUse(args) {
+  return nudgeReason(args) !== null;
+}
+
+module.exports = { looksLikeCapabilityDenial, isActionRequest, nudgeReason, shouldNudgeToolUse };

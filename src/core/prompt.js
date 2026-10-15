@@ -106,7 +106,7 @@ When the user asks for something that needs these abilities, call the tool and d
 The user may send new messages while you are working; they show up as normal user messages. Read them and adjust what you are doing.`;
 }
 
-function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings, homeDir = '', knownFolders = {} }) {
+function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings, homeDir = '', knownFolders = {}, permissionMode = 'default' }) {
   const names = new Set(tools.map((t) => t.name));
   const can = (n) => names.has(n);
   const parts = [];
@@ -156,6 +156,10 @@ function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings, h
     if (root) rules.push('- Work inside the project folder; LocalAI asks the user before anything outside it.');
     rules.push('- Do not read or print secrets (.env files, keys, tokens) unless the user asks.');
     rules.push('- If the user rejects an action, do not repeat it; choose another approach or ask.');
+    if (permissionMode !== 'plan') {
+      rules.push('- Act, don\'t narrate: when the user asks you to do something, do it with your tools right away. Never reply with a list of steps for later, and never ask "would you like me to proceed?" — the user already asked, and risky actions get their own approval prompt.');
+      rules.push('- If a tool fails, read the error, fix the cause (wrong path, missing folder, wrong command) and try again yourself before reporting back.');
+    }
     rules.push('- When done, give a brief summary of what you changed and how you verified it. Do not claim something works unless you verified it.');
     parts.push(rules.join('\n'));
   }
@@ -163,7 +167,13 @@ function buildSystemPrompt({ persona, effort, root, tools, toolMode, settings, h
   const budget = `You have a budget of ${effort.maxSteps} steps (model turns) and ${effort.maxMinutes} minutes for each task.`;
   parts.push(`# Effort\n${effort.prompt}\n${budget}`);
 
-  parts.push('# Output\nBe concise. Use Markdown. Put code in fenced code blocks with a language tag.');
+  if (permissionMode === 'plan') {
+    parts.push('# Plan mode\nYou are in PLAN MODE. Do not change files or run commands. Explore the code with the read tools, then reply with a clear, numbered plan of exactly what you would change and how you would verify it. The user switches out of plan mode to let you carry it out.');
+  } else if (permissionMode === 'bypass') {
+    parts.push('# Permissions\nThe user enabled full access: your tool calls run immediately without approval prompts. Be careful with anything destructive, and prefer reversible actions.');
+  }
+
+  parts.push('# Output\nBe brief. No preamble, no restating the request, no step-by-step narration of what you are about to do. Short status lines while working; a short summary at the end. Use Markdown and fenced code blocks with a language tag.');
 
   if (toolMode === 'text' && tools.length) parts.push(TEXT_TOOL_PROTOCOL(tools));
 

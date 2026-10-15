@@ -21,7 +21,7 @@ test.after(async () => {
   await mock.close();
 });
 
-function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 'medium', decide = () => 'approve', permissions, settingsPatch = {}, files = {}, noProject = false }) {
+function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 'medium', decide = () => 'approve', permissions, settingsPatch = {}, files = {}, noProject = false, permissionMode = 'default' }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'localai-agent-'));
   for (const [f, c] of Object.entries(files)) fs.writeFileSync(path.join(root, f), c);
   const persona = builtinPersona(personaId);
@@ -36,6 +36,7 @@ function makeRun({ text, model = 'mock-coder:7b', personaId = 'nexus', effort = 
     chat,
     persona,
     effortId: effort,
+    permissionMode,
     model,
     settings: { ...defaultSettings(), ...settingsPatch },
     root: noProject ? null : root,
@@ -291,4 +292,53 @@ test('a model that claims it cannot act is sent back to use its tools', async ()
   const notices = t.chat.items.filter((i) => i.type === 'notice').map((i) => i.text);
   assert.ok(notices.some((n) => /without using its tools/.test(n)), notices.join('|'));
   assert.equal(t.run.toolNudges, 1);
+});
+
+test('a model that asks "shall I proceed?" is told to carry on', async () => {
+  const t = makeRun({ text: 'make a python script and run it', permissions: { edit: 'auto' } });
+  assert.equal(await t.start(), 'done');
+  assert.ok(fs.existsSync(path.join(t.root, 'script.py')));
+  const notices = t.chat.items.filter((i) => i.type === 'notice').map((i) => i.text);
+  assert.ok(notices.some((n) => /carry on/.test(n)), notices.join('|'));
+});
+
+test('plan mode is read-only and asks for a plan', async () => {
+  const t = makeRun({ text: 'hi there', permissionMode: 'plan' });
+  await t.start();
+  const req = mock.requests.filter((r) => r.path === '/api/chat').pop();
+  const names = req.body.tools.map((x) => x.function.name);
+  assert.ok(names.includes('read_file'));
+  assert.ok(!names.includes('write_file') && !names.includes('run_command') && !names.includes('delete_file'));
+  assert.match(req.body.messages[0].content, /PLAN MODE/);
+});
+
+test('accept-edits mode applies edits without asking but still asks for risky commands', async () => {
+  const t = makeRun({ text: 'Create hello.js and run it', permissionMode: 'acceptEdits' });
+  await t.start();
+  assert.ok(fs.existsSync(path.join(t.root, 'hello.js')));
+  assert.ok(!t.approvals.some((a) => a.category === 'edit'));
+  const t2 = makeRun({ text: 'run the dangerous cleanup', permissionMode: 'acceptEdits', decide: () => 'reject' });
+  fs.mkdirSync(path.join(t2.root, 'build'));
+  await t2.start();
+  assert.equal(t2.approvals[0].kind, 'danger');
+});
+
+test('bypass mode runs everything without approval prompts, and changes stay undoable', async () => {
+  const t = makeRun({ text: 'Delete the old file', permissionMode: 'bypass', files: { 'old.txt': 'bye' } });
+  await t.start();
+  assert.equal(t.approvals.length, 0);
+  assert.equal(fs.existsSync(path.join(t.root, 'old.txt')), false);
+  const del = t.chat.items.find((i) => i.type === 'tool' && i.name === 'delete_file');
+  assert.equal(del.status, 'ok');
+  assert.ok(del.display.change.id, 'deletion was backed up');
+  if (process.platform !== 'win32') {
+    // the scripted command is `rm -rf build`, which only exists on Unix shells
+    const t2 = makeRun({ text: 'run the dangerous cleanup', permissionMode: 'bypass' });
+    fs.mkdirSync(path.join(t2.root, 'build'));
+    await t2.start();
+    assert.equal(t2.approvals.length, 0);
+    assert.equal(fs.existsSync(path.join(t2.root, 'build')), false);
+  }
+  const req = mock.requests.filter((r) => r.path === '/api/chat').pop();
+  assert.match(req.body.messages[0].content, /full access/);
 });

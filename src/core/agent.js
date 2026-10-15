@@ -10,16 +10,33 @@ const { buildSystemPrompt } = require('./prompt');
 const { fitMessages, toolLimits } = require('./context');
 const { parseTextToolCalls, ThinkSplitter, tryParseJson } = require('./toolcalls');
 const { resolveEffort, thinkParam } = require('./effort');
-const { shouldNudgeToolUse } = require('./guards');
+const { nudgeReason } = require('./guards');
 const { resolveProjectPath, toPosix } = require('./safety');
 const { uid, estimateTokens, truncate, abortError } = require('./util');
 
 const MAX_CALLS_PER_STEP = 8;
 const DISPLAY_OUTPUT_CHARS = 20000;
 
-function effectivePermissions(persona, settings) {
+const PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan', 'bypass']);
+
+// The session permission mode (chosen in the UI) overrides the persona's own
+// permissions, like Claude Code's Ask / Accept Edits / Plan / Bypass modes.
+function effectivePermissions(persona, settings, mode = 'default') {
   const p = { ...persona.permissions };
-  if (settings.safeMode) {
+  if (mode === 'plan') {
+    // Read-only: explore and propose a plan, change nothing.
+    p.edit = 'off';
+    p.commands = 'off';
+  } else if (mode === 'acceptEdits') {
+    p.edit = 'auto';
+  } else if (mode === 'bypass') {
+    // Full access: enable every tool; approvals are skipped in approve().
+    p.edit = 'auto';
+    if (p.commands === 'off') p.commands = 'risky';
+    p.web = 'auto';
+  }
+  // Safe mode still forces prompts, but never over a deliberate bypass.
+  if (settings.safeMode && mode !== 'bypass') {
     if (p.edit === 'auto') p.edit = 'ask';
     if (p.commands === 'risky') p.commands = 'ask';
     if (p.web === 'auto') p.web = 'ask';
@@ -55,6 +72,7 @@ class AgentRun {
     this.queue = [];
     this.toolNudges = 0;
     this.currentRequest = '';
+    this.permissionMode = this.permissionMode || 'default';
     this.closed = false;
     this.extraMs = 0;
     this.pausedMs = 0;
@@ -164,7 +182,9 @@ class AgentRun {
   async run({ text, attachments = [] }) {
     this.started = Date.now();
     this.effort = resolveEffort(this.effortId, this.settings.effortLimits);
-    this.permissions = effectivePermissions(this.persona, this.settings);
+    this.mode = PERMISSION_MODES.has(this.permissionMode) ? this.permissionMode : 'default';
+    this.bypass = this.mode === 'bypass';
+    this.permissions = effectivePermissions(this.persona, this.settings, this.mode);
     this.verifyLeft = this.effort.verifyRetries;
     this.reviewPending = this.effort.selfReview;
     this.planGateUsed = false;
@@ -249,15 +269,19 @@ class AgentRun {
 
       if (!resp.calls.length) {
         if (this.queue.length) continue; // the user sent something meanwhile: keep going
-        if (this.toolNudges < 2 && this.tools.some((t) => t.category !== 'plan') && shouldNudgeToolUse({ request: this.currentRequest, reply: resp.text, usedTools: this.toolCallCount > 0 })) {
-          // The model says it can't act (or explains manual steps) although it has tools for it.
+        const canAct = this.tools.some((t) => t.category === 'edit' || t.category === 'command');
+        const why = canAct && this.toolNudges < 2 ? nudgeReason({ request: this.currentRequest, reply: resp.text, usedTools: this.toolCallCount > 0 }) : null;
+        if (why) {
+          // The model talked instead of acting: it claimed it can't, listed manual
+          // steps, or asked for permission to continue. Send it back to work.
           this.toolNudges++;
           const names = this.tools.map((t) => t.name).join(', ');
-          this.chat.messages.push({
-            role: 'user',
-            content: `[LocalAI] You DO have working tools on this computer: ${names}. Do not tell the user to do it themselves and do not say you can't access their computer. Call the right tool now to do what they asked. (If you are declining for a different reason, explain that reason instead.)`,
-          });
-          this.addItem({ type: 'notice', level: 'info', text: 'The model answered without using its tools — reminding it that it can act on your computer.' });
+          const content =
+            why === 'confirm'
+              ? `[LocalAI] Don't ask whether to proceed — the user already asked you to do this, and anything risky gets its own approval prompt. Continue now with your tools and finish the task, then give a short summary.`
+              : `[LocalAI] You DO have working tools on this computer: ${names}. Do not tell the user to do it themselves and do not say you can't access their computer. Call the right tool now to do what they asked. (If you are declining for a different reason, explain that reason instead.)`;
+          this.chat.messages.push({ role: 'user', content });
+          this.addItem({ type: 'notice', level: 'info', text: why === 'confirm' ? 'The model stopped to ask for permission — telling it to carry on.' : 'The model answered without using its tools — reminding it that it can act on your computer.' });
           this.save();
           continue;
         }
@@ -368,6 +392,7 @@ class AgentRun {
       settings: this.settings,
       homeDir: this.homeDir,
       knownFolders: this.knownFolders,
+      permissionMode: this.mode,
     });
     const schemas = this.toolMode === 'native' && !noTools && this.tools.length ? ToolRegistry.schemas(this.tools) : undefined;
     const reserve = Math.min(4096, Math.floor(this.numCtx * 0.25));
@@ -600,7 +625,7 @@ class AgentRun {
       limits: this.limits,
       settings: this.settings,
       permissions: this.permissions,
-      forceApproval: !!this.settings.safeMode,
+      forceApproval: !!this.settings.safeMode && !this.bypass,
       // No project: paths resolve against the home folder and count as outside
       // the project, so each access asks the user first.
       resolve: (p) => (root ? resolveProjectPath(root, p) : resolveOutside(workDir, p)),
@@ -614,6 +639,12 @@ class AgentRun {
   }
 
   async approve(req, item) {
+    // Bypass mode: the user chose to let the AI act without approval prompts.
+    // Changes are still backed up and can be undone from the chat.
+    if (this.bypass && !this.signal.aborted) {
+      this.updateItem(item, { decision: 'auto' });
+      return { approved: true };
+    }
     if (req.blanket !== false && this.blanket.has(req.category)) return { approved: true };
     if (this.signal.aborted) return { approved: false };
     const request = { id: uid('ap_'), ...req, itemId: item.id, chatId: this.chat.id };
@@ -670,4 +701,4 @@ function sanitizeArgsForDisplay(args) {
   return out;
 }
 
-module.exports = { AgentRun, effectivePermissions };
+module.exports = { AgentRun, effectivePermissions, PERMISSION_MODES };

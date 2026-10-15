@@ -19,6 +19,7 @@ function defaultSettings() {
     temperature: null,
     personaId: 'nexus',
     effort: DEFAULT_EFFORT,
+    permissionMode: 'default',
     effortLimits: defaultEffortLimits(),
     commandTimeoutSec: 120,
     shell: 'auto',
@@ -66,6 +67,7 @@ function sanitizeSettings(s) {
   out.commandTimeoutSec = Math.min(Math.max(parseInt(out.commandTimeoutSec, 10) || d.commandTimeoutSec, 5), 3600);
   out.temperature = out.temperature === null || out.temperature === '' || !Number.isFinite(Number(out.temperature)) ? null : Math.min(Math.max(Number(out.temperature), 0), 2);
   if (!EFFORT_IDS.includes(out.effort)) out.effort = DEFAULT_EFFORT;
+  if (!['default', 'acceptEdits', 'plan', 'bypass'].includes(out.permissionMode)) out.permissionMode = 'default';
   const limits = defaultEffortLimits();
   for (const id of EFFORT_IDS) {
     const u = (out.effortLimits || {})[id] || {};

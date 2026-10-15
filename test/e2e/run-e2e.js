@@ -84,6 +84,26 @@ async function main() {
     await page.waitForSelector('#effortSelector:has-text("High")');
     step('effort set to High');
 
+    // permission modes
+    await page.click('#permSelector');
+    await page.waitForSelector('.popover .pop-item:has-text("Bypass permissions")');
+    await page.waitForTimeout(250);
+    await shot('03b-permissions');
+    await page.click('.popover .pop-item:has-text("Bypass permissions")');
+    await page.waitForSelector('.modal:has-text("Bypass all permissions?")');
+    await page.click('.modal .btn.danger');
+    await page.waitForSelector('#permSelector.perm-bypass');
+    await page.click('#input');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#permSelector.perm-default');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#permSelector.perm-acceptEdits');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#permSelector.perm-plan');
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForSelector('#permSelector.perm-default');
+    step('permission modes: bypass needs confirmation, Shift+Tab cycles Ask/Accept edits/Plan');
+
     // run a debugging task
     await page.fill('#input', 'Fix the bug: npm test fails');
     await page.keyboard.press('Enter');

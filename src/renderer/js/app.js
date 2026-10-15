@@ -325,7 +325,60 @@
     }
   }
 
+  // --------------------------------------------------------- permissions
+
+  const PERM_MODES = [
+    { id: 'default', label: 'Ask', icon: 'lock', desc: 'Asks before file changes and risky commands (per AI settings).' },
+    { id: 'acceptEdits', label: 'Accept edits', icon: 'edit', desc: 'Applies file changes without asking. Still asks before risky commands, deletes and anything outside the project.' },
+    { id: 'plan', label: 'Plan', icon: 'clipboard', desc: 'Read-only: explores your code and writes a plan. Changes nothing, runs nothing.' },
+    { id: 'bypass', label: 'Bypass permissions', icon: 'alert', desc: 'Does everything without asking: edits, deletes, any command, web access, files anywhere. Changes are still backed up and can be undone.' },
+  ];
+  const permDef = (id) => PERM_MODES.find((m) => m.id === id) || PERM_MODES[0];
+
+  function renderPermSelector() {
+    const m = permDef(state.settings.permissionMode);
+    const el = $('#permSelector');
+    el.className = `selector perm perm-${m.id}`;
+    el.innerHTML = icon(m.icon);
+    el.append(h('span.label', { text: m.label }), h('span', { html: icon('chevronDown', 'chev') }));
+    el.title = `${m.label} — ${m.desc} (Shift+Tab to switch)`;
+  }
+
+  async function setPermissionMode(id) {
+    if (id === 'bypass' && state.settings.permissionMode !== 'bypass') {
+      const ok = await confirmDialog({
+        title: 'Bypass all permissions?',
+        message: 'The AI will edit and delete files anywhere, run any command and use the internet without asking you first.\n\nFile changes are still backed up and can be undone from the chat, but command effects (installs, deletions by commands, git pushes…) cannot be undone.',
+        confirmText: 'Bypass permissions',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    await saveSettings({ permissionMode: id });
+    renderPermSelector();
+    if (state.running) toast(`${permDef(id).label} applies from your next message`, 'info', 2000);
+  }
+
+  function openPermPicker() {
+    const box = h('div');
+    box.append(h('div.pop-title', { text: 'Permissions' }));
+    for (const m of PERM_MODES) {
+      box.append(
+        h(
+          'div.pop-item' + (m.id === state.settings.permissionMode ? '.selected' : ''),
+          { on: { click: () => (closePopover(), setPermissionMode(m.id)) } },
+          h('span', { html: icon(m.icon), style: { color: m.id === 'bypass' ? 'var(--red)' : '', display: 'grid', marginTop: '2px' } }),
+          h('div.pi-main', {}, h('div.pi-name', { text: m.label }), h('div.pi-desc', { text: m.desc })),
+          m.id === state.settings.permissionMode ? h('span.check', { html: icon('check') }) : null,
+        ),
+      );
+    }
+    box.append(h('div.pop-foot', { html: icon('info') + '<span>Shift+Tab in the message box switches between Ask, Accept edits and Plan.</span>' }));
+    popover($('#permSelector'), box, { placement: 'top', width: 380 });
+  }
+
   function renderSelectors() {
+    renderPermSelector();
     const p = persona();
     const ps = $('#personaSelector');
     ps.innerHTML = '';
@@ -398,6 +451,7 @@
                 closePopover();
                 await saveSettings({ effort: e.id });
                 renderSelectors();
+                if (!state.chat?.items?.length) renderThread();
               },
             },
           },
@@ -810,7 +864,7 @@
     renderAttachments();
     state.running = id;
     updateComposer();
-    const res = await api.send({ chatId: isNew ? null : id, newChatId: isNew ? id : undefined, text: text || 'See the attached files.', attachments, projectPath: state.project, personaId: p.id, effort: state.settings.effort, model: state.settings.model });
+    const res = await api.send({ chatId: isNew ? null : id, newChatId: isNew ? id : undefined, text: text || 'See the attached files.', attachments, projectPath: state.project, personaId: p.id, effort: state.settings.effort, model: state.settings.model, permissionMode: state.settings.permissionMode });
     if (res?.error) {
       state.running = null;
       updateComposer();
@@ -832,7 +886,7 @@
     renderAttachments();
     autosize();
     const p = persona();
-    const res = await api.send({ chatId: state.chat.id, text: text || 'See the attached files.', attachments, projectPath: state.project, personaId: p.id, effort: state.settings.effort, model: state.settings.model });
+    const res = await api.send({ chatId: state.chat.id, text: text || 'See the attached files.', attachments, projectPath: state.project, personaId: p.id, effort: state.settings.effort, model: state.settings.model, permissionMode: state.settings.permissionMode });
     if (res?.error) {
       toast(res.error, 'error');
       setInput(text);
@@ -863,6 +917,7 @@
     $('#modelChip').addEventListener('click', openModelPicker);
     $('#personaSelector').addEventListener('click', openPersonaPicker);
     $('#effortSelector').addEventListener('click', openEffortPicker);
+    $('#permSelector').addEventListener('click', openPermPicker);
     $('#terminalToggle').addEventListener('click', () => LA.terminal.toggle());
     $('#attachBtn').addEventListener('click', async () => addAttachments(await api.pickAttachments(state.project)));
     $('#sendBtn').addEventListener('click', () => send());
@@ -871,6 +926,14 @@
     const input = $('#input');
     input.addEventListener('input', autosize);
     input.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab' && e.shiftKey) {
+        // Cycle Ask → Accept edits → Plan (Bypass only from the menu, with a confirmation)
+        e.preventDefault();
+        const cycle = ['default', 'acceptEdits', 'plan'];
+        const i = cycle.indexOf(state.settings.permissionMode);
+        setPermissionMode(cycle[(i + 1) % cycle.length]);
+        return;
+      }
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
         send();

@@ -4,6 +4,7 @@
 
 const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const { StringDecoder } = require('string_decoder');
 const { stripAnsi } = require('./util');
 const { filterSecretEnv } = require('./safety');
@@ -38,6 +39,37 @@ function shellDescription(name, platform = process.platform) {
   return n;
 }
 
+// Pick the first candidate that exists on disk; fall back to the last (a bare
+// name resolved via PATH). This avoids a misleading ENOENT when e.g. ComSpec
+// points somewhere unusual.
+function firstExisting(candidates) {
+  for (const c of candidates) {
+    if (c && path.isAbsolute(c) && fs.existsSync(c)) return c;
+  }
+  return candidates.filter(Boolean).pop() || candidates[0];
+}
+
+function shellExecutable(shellName) {
+  const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const pf = process.env.ProgramFiles || 'C:\\Program Files';
+  switch (shellName) {
+    case 'cmd':
+      return firstExisting([process.env.ComSpec, path.join(sysRoot, 'System32', 'cmd.exe'), 'C:\\Windows\\System32\\cmd.exe', 'cmd.exe']);
+    case 'powershell':
+      return firstExisting([path.join(sysRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), 'powershell.exe']);
+    case 'pwsh':
+      return firstExisting([path.join(pf, 'PowerShell', '7', 'pwsh.exe'), process.platform === 'win32' ? 'pwsh.exe' : '/usr/bin/pwsh', 'pwsh']);
+    case 'zsh':
+      return firstExisting(['/bin/zsh', '/usr/bin/zsh', 'zsh']);
+    case 'sh':
+      return firstExisting(['/bin/sh', '/usr/bin/sh', 'sh']);
+    case 'bash':
+    default:
+      if (process.platform === 'win32') return firstExisting([path.join(pf, 'Git', 'bin', 'bash.exe'), path.join(sysRoot, 'System32', 'bash.exe'), 'bash.exe']);
+      return firstExisting(['/bin/bash', '/usr/bin/bash', 'bash']);
+  }
+}
+
 function buildInvocation(shellName, command) {
   const ps = (exe) => ({
     file: exe,
@@ -51,29 +83,33 @@ function buildInvocation(shellName, command) {
       `[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $ProgressPreference='SilentlyContinue'; ${command}`,
     ],
   });
+  const exe = shellExecutable(shellName);
   switch (shellName) {
     case 'cmd':
       return {
-        file: process.env.ComSpec || 'cmd.exe',
+        file: exe,
         args: ['/d', '/s', '/c', `"chcp 65001>nul & ${command}"`],
         windowsVerbatimArguments: true,
       };
     case 'powershell':
-      return ps('powershell.exe');
     case 'pwsh':
-      return ps('pwsh');
+      return ps(exe);
     case 'zsh':
-      return { file: '/bin/zsh', args: ['-c', command] };
     case 'sh':
-      return { file: '/bin/sh', args: ['-c', command] };
     case 'bash':
     default:
-      return { file: process.platform === 'win32' ? 'bash.exe' : 'bash', args: ['-c', command] };
+      return { file: exe, args: ['-c', command] };
   }
 }
 
 function commandEnv({ hideSecrets = true } = {}) {
   const base = hideSecrets ? filterSecretEnv(process.env) : { ...process.env };
+  // Windows shells need these to start; make sure they are never dropped.
+  if (process.platform === 'win32') {
+    for (const key of ['SystemRoot', 'windir', 'ComSpec', 'SystemDrive', 'PATH', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE']) {
+      if (process.env[key] != null) base[key] = process.env[key];
+    }
+  }
   return {
     ...base,
     NO_COLOR: '1',
@@ -120,6 +156,20 @@ function killTree(child) {
 function runCommand(command, { cwd, shell, timeoutMs = 120000, signal, onData, hideSecrets = true, maxBuffer = 2_000_000 } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
+    // A missing working folder makes spawn report ENOENT on the shell itself,
+    // which is confusing. Catch it here and give a clear message instead.
+    if (cwd) {
+      let st = null;
+      try {
+        st = fs.statSync(cwd);
+      } catch {
+        st = null;
+      }
+      if (!st || !st.isDirectory()) {
+        resolve({ code: -1, output: `The working folder does not exist: ${cwd}\nCreate it first (create_folder) or run the command with the correct folder.`, timedOut: false, aborted: false, durationMs: 0 });
+        return;
+      }
+    }
     const shellName = resolveShellName(shell);
     const inv = buildInvocation(shellName, command);
     let output = '';

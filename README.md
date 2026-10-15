@@ -70,13 +70,20 @@ This uses [electron-builder](https://www.electron.build/) to create an installer
 1. **Open a project folder** (sidebar → *Project* → folder icon). The AI works freely inside this folder.
    With no folder open, it still works from your home folder (e.g. *"make a folder called notes on my
    Desktop"*), but asks before every file access and command.
-2. **Pick an AI and an effort level** with the two selectors under the message box. The Ollama model
+2. **Pick an AI, an effort level and a permission mode** with the selectors under the message box. The Ollama model
    (top right) is shared by all AIs. Switching AIs is instant and never downloads anything.
 3. **Describe a task**, e.g. *"Run the tests and fix whatever fails"*. Attach files with the paperclip
    button or by dragging them onto the window.
 4. Watch the agent work: streaming answers, tool calls (read / edit / run …), command output, the plan
    checklist, and a status bar with the step, time budget and current action.
-5. **Approve or reject** proposed edits (shown as diffs) and commands. *Apply all edits in this task*
+5. **Choose how much the AI may do on its own** with the permissions button (like Claude Code):
+   - **Ask** (default): asks before file changes and risky commands, per the AI's settings
+   - **Accept edits**: applies file changes without asking; still asks for risky commands, deletes and anything outside the project
+   - **Plan**: read-only; the AI explores and writes a plan, changes nothing
+   - **Bypass permissions**: does everything without asking, after a confirmation. File changes are still backed up and undoable; effects of commands are not.
+
+   `Shift+Tab` in the message box cycles Ask → Accept edits → Plan.
+   **Approve or reject** proposed edits (shown as diffs) and commands. *Apply all edits in this task*
    skips further edit prompts for the current task only.
 6. **Send messages while it works**: just type and press Enter. Your message shows as *queued* and the AI reads
    it at its next step, so you can correct or extend the task without stopping it.
@@ -182,7 +189,8 @@ instruction in the prompt:
 | Agent stops early | Raise the effort level or its limits (Settings → Effort), or press **Continue**. |
 | Commands hang | Servers and watch modes never exit; they are stopped at the timeout. Ask for a one-off build or test. |
 | Weird tool behaviour | Use a model with native tool calling (`qwen2.5-coder`, `qwen3`, `llama3.1`). |
-| *"As an AI I can't access files"* | Pick a model with the **tools** badge in the model menu. Small or old models sometimes ignore their tools. |
+| *"As an AI I can't access files"* / *"Shall I proceed?"* | LocalAI sends the model back to work automatically (you'll see a note). If it keeps happening, pick a model with the **tools** badge. |
+| *working folder does not exist* | The AI ran a command in a folder that isn't there. It usually fixes this itself; opening the folder as a project avoids it. |
 | Web search fails | `web_search` uses DuckDuckGo. Check your connection, or give the AI a URL to read with `fetch_url`. |
 
 ---
